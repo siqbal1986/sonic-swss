@@ -739,6 +739,13 @@ VNetRouteOrch::VNetRouteOrch(DBConnector *db, vector<string> &tableNames, VNetOr
 
 bool VNetRouteOrch::hasNextHopGroup(const string& vnet, const NextHopGroupKey& nexthops)
 {
+    if (isNhgDirectlyConnected(nexthops))
+    {
+        // The next hop group is directly connected. we need to find it in routeOrch state.
+        return gRouteOrch->hasNextHopGroup(nexthops);
+    }
+
+    // For non directly connected next hop group, we need to find it in VNetRouteOrch state
     return syncd_nexthop_groups_[vnet].find(nexthops) != syncd_nexthop_groups_[vnet].end();
 }
 
@@ -918,13 +925,23 @@ bool VNetRouteOrch::createNextHopGroup(const string& vnet,
     {
         return true;
     }
-    else if (nexthops.getSize() == 1)
+    if (is_nhg_directly_connected.find(next_hop_group_key) != is_nhg_directly_connected.end())
+    {
+        // The next hop group is directly connected. we need to find it in routeOrch state.
+        return gRouteOrch->hasNextHopGroup(nexthops);
+    }
+    if (is_nhg_directly_connected())
+    if (nexthops.getSize() == 1)
     {
         NextHopKey nexthop(nexthops.to_string(), true);
         NextHopGroupInfo next_hop_group_entry;
         next_hop_group_entry.next_hop_group_id = vrf_obj->getTunnelNextHop(nexthop);
         next_hop_group_entry.ref_count = 0;
-        if (monitoring == "custom" || nexthop_info_[vnet].find(nexthop.ip_address) == nexthop_info_[vnet].end() || nexthop_info_[vnet][nexthop.ip_address].bfd_state == SAI_BFD_SESSION_STATE_UP)
+        // No idea what this logic is doing. but it is definitely correct.
+        // <TODO> Need to understand this logic and document it.
+        if (monitoring == "custom" ||
+            nexthop_info_[vnet].find(nexthop.ip_address) == nexthop_info_[vnet].end() ||
+            nexthop_info_[vnet][nexthop.ip_address].bfd_state == SAI_BFD_SESSION_STATE_UP)
         {
             next_hop_group_entry.active_members[nexthop] = SAI_NULL_OBJECT_ID;
         }
@@ -973,6 +990,91 @@ NextHopGroupKey VNetRouteOrch::getActiveNHSet(const string& vnet,
     return nhg_custom;
 }
 
+bool isNhgDirectlyConnected( NextHopGroupKey& nexthops)
+{
+    if(is_nhg_directly_connected_.find(nexthops) != is_nhg_directly_connected_.end())
+    {
+        return is_nhg_directly_connected_[nexthops];
+    }
+    else
+    {
+
+    }
+    return false;
+    //TODO I was working on this function. Need to complete it.
+}
+
+bool areNhsDirectlyConnected( NextHopGroupKey& nexthops)
+{
+    
+}
+bool verifyDirectlyConnectedNexthops(const string& vnet,
+                                     NextHopGroupKey& primary,
+                                     NextHopGroupKey& secondary,
+                                     const string& monitoring,
+                                     IpPrefix& prefix,
+                                     VNetVrfObject *vrf_obj)
+{
+    // This function is used to verify that the nexthops in the primary or secondary are directly connected.
+    // If any of primary and secondary are empty or both are directly connected, then we return false.
+    // if both are not directly connected, we return false.
+    // we also store this information in the following structures to use when creating nexthop groups
+    // as well as adding routes. 
+    // std::map<IpPrefix, NextHopGroupKey> directly_connected_nhg_;
+    // std::map<Nexthop, std::set<IpPrefix>> directly_connected_prefix_;
+    bool is_primary_directly_connected = false;
+    bool `is_secondary_directly_connected = false;
+    if (primary.getSize() == 0 || secondary.getSize() == 0)
+    {
+        return false;
+    }
+    auto intfsets = vrf_obj->getInterfaceSet();
+    auto first_primary_nh = primary.getNextHops().begin();
+    auto first_secondary_nh = secondary.getNextHop  s().begin();
+
+    for (auto intf : intfsets)
+    {
+        if (gIntfsOrch->isPrefixSubnet(first_primay_nh->ip_address, intf->first))
+        {
+            is_primary_directly_connected = true;
+        }
+        if (gIntfsOrch->isPrefixSubnet(first_secondary_nh->ip_address, intf->first))
+        {
+            is_secondary_directly_connected = true;
+        }
+    }
+    if (is_primary_directly_connected && is_secondary_directly_connected)
+    {
+        return false;
+    }
+    else
+    {
+        if (is_primary_directly_connected)
+        {
+            directly_connected_nhg_[prefix] = primary;
+            for (auto nh : primary.getNextHops())
+            {
+                directly_connected_prefix_[nh].insert(prefix);
+                is_nh_directly_connected[nh] = true;
+            }
+            is_nhg_directly_connected[primary] = true;
+
+        }
+        else
+        {
+            directly_connected_nhg_[prefix] = secondary;
+            for(auto nh : secondary.getNextHops())
+            {
+                directly_connected_prefix_[nh].insert(prefix);
+                is_nh_directly_connected[nh] = true;
+
+            }
+            is_nhg_directly_connected[secondary] = true;
+        }
+    }
+    return true;
+}
+
 bool VNetRouteOrch::selectNextHopGroup(const string& vnet,
                                        NextHopGroupKey& nexthops_primary,
                                        NextHopGroupKey& nexthops_secondary,
@@ -989,7 +1091,7 @@ bool VNetRouteOrch::selectNextHopGroup(const string& vnet,
     // This is followed by an attempt to create a NHG which can be subset of nexthops_primary
     // depending on the endpoint monitor state. If no NHG from primary is created, we attempt
     // the same for secondary.
-    if(nexthops_secondary.getSize() != 0 && monitoring == "custom")
+    if(nexthops_secondary.getSize() != 0)
     {
         auto it_route =  syncd_tunnel_routes_[vnet].find(ipPrefix);
         if (it_route == syncd_tunnel_routes_[vnet].end())
@@ -1118,6 +1220,18 @@ bool VNetRouteOrch::doRouteTask<VNetVrfObject>(const string& vnet, IpPrefix& ipP
 
     if (op == SET_COMMAND)
     {
+        if (check_directly_connected)
+        {
+            SWSS_LOG_NOTICE("Creating directly connected route %s with primary (%s) and secondary (%s)",
+                            ipPrefix.to_string().c_str(),nexthops.to_string().c_str(),
+                            nexthops_secondary.to_string().c_str());
+            if (!verifyDirectlyConnectedNexthops(vnet, nexthops, nexthops_secondary, monitoring, ipPrefix,vrf_obj))
+            {
+                SWSS_LOG_ERROR("Failed to verify directly connected nexthops for %s", ipPrefix.to_string().c_str());
+                return false;
+            }
+        }
+        
         sai_object_id_t nh_id = SAI_NULL_OBJECT_ID;
         NextHopGroupKey active_nhg("", true);
         if (!selectNextHopGroup(vnet, nexthops, nexthops_secondary, monitoring, ipPrefix, vrf_obj, active_nhg, monitors))
@@ -1340,6 +1454,17 @@ bool VNetRouteOrch::doRouteTask<VNetVrfObject>(const string& vnet, IpPrefix& ipP
 
         vrf_obj->removeRoute(ipPrefix);
         vrf_obj->removeProfile(ipPrefix);
+
+        // cleanup the state related to the direct connected nexthops.
+        if (directly_connected_nhg_.find(ipPrefix) != directly_connected_nhg_.end())
+        {
+            auto nhg = directly_connected_nhg_[ipPrefix];
+            for (auto nh : nhg.getNextHops())
+            {
+                directly_connected_prefix_[nh].erase(ipPrefix);
+            }
+            directly_connected_nhg_.erase(ipPrefix);
+        } 
 
         removeRouteState(vnet, ipPrefix);
         if (prefix_to_adv_prefix_.find(ipPrefix) != prefix_to_adv_prefix_.end())

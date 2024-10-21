@@ -459,6 +459,9 @@ private:
                             VNetVrfObject *vrf_obj, NextHopGroupKey&,
                             const std::map<NextHopKey,IpAddress>& monitors=std::map<NextHopKey, IpAddress>());
 
+    bool verifyDirectlyConnectedNexthops(const string& vnet, NextHopGroupKey& primary, NextHopGroupKey& secondary,
+                                         const string& monitoring, IpPrefix& prefix, VNetVrfObject *vrf_obj);
+
     void createBfdSession(const string& vnet, const NextHopKey& endpoint, const IpAddress& ipAddr,
                           bool has_monitor_interval, u_int64_t tx_monitor_interval, u_int64_t rx_monitor_interval);
     void removeBfdSession(const string& vnet, const NextHopKey& endpoint, const IpAddress& ipAddr);
@@ -477,6 +480,9 @@ private:
     bool updateTunnelRoute(const string& vnet, IpPrefix& ipPrefix, NextHopGroupKey& nexthops, string& op);
     void createSubnetDecapTerm(const IpPrefix &ipPrefix);
     void removeSubnetDecapTerm(const IpPrefix &ipPrefix);
+    bool isNhgDirectlyConnected( NextHopGroupKey& nexthops);
+    bool areNhsDirectlyConnected( NextHopGroupKey& nexthops);
+    bool isNhDirectlyConnected(NextHopKey& nh);
 
     template<typename T>
     bool doRouteTask(const string& vnet, IpPrefix& ipPrefix, NextHopGroupKey& nexthops, string& op, string& profile,
@@ -502,6 +508,11 @@ private:
     std::map<IpPrefix, int> adv_prefix_refcount_;
     std::map<IpPrefix, VnetRouteMonitorIntervals> prefix_to_monitor_intervals_;
     std::set<IpPrefix> subnet_decap_terms_created_;
+    std::map<IpPrefix, NextHopGroupKey> directly_connected_nhg_;
+    std::map<Nexthop, std::set<IpPrefix>> directly_connected_prefix_;
+    std::map<Nexthop, bool> is_nh_directly_connected;
+    std::map<NextHopGroupKey, bool> is_nhg_directly_connected;
+
     ProducerStateTable bfd_session_producer_;
     ProducerStateTable app_tunnel_decap_term_producer_;
     unique_ptr<Table> monitor_session_producer_;
@@ -509,6 +520,7 @@ private:
     shared_ptr<DBConnector> app_db_;
     unique_ptr<Table> state_vnet_rt_tunnel_table_;
     unique_ptr<Table> state_vnet_rt_adv_table_;
+    
 };
 
 class VNetCfgRouteOrch : public Orch
